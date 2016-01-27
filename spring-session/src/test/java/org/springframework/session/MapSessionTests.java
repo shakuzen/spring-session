@@ -15,7 +15,7 @@
  */
 package org.springframework.session;
 
-import static org.fest.assertions.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 import java.util.Set;
 
@@ -92,6 +92,10 @@ public class MapSessionTests {
 
 		public String getId() {
 			return "id";
+		}
+
+		public void setLastAccessedTime(long lastAccessedTime) {
+			throw new UnsupportedOperationException();
 		}
 
 		public long getLastAccessedTime() {

@@ -15,7 +15,7 @@
  */
 package org.springframework.session.web.http;
 
-import static org.fest.assertions.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.TimeUnit;
 
 import javax.servlet.FilterChain;
 import javax.servlet.ServletContext;
@@ -56,6 +57,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.session.ExpiringSession;
+import org.springframework.session.MapSession;
 import org.springframework.session.MapSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
@@ -115,6 +117,26 @@ public class SessionRepositoryFilterTests {
 	}
 
 	@Test
+	public void doFilterCreateSetsLastAccessedTime() throws Exception {
+		MapSession session = new MapSession();
+		session.setLastAccessedTime(0L);
+		this.sessionRepository = spy(this.sessionRepository);
+		when(this.sessionRepository.createSession()).thenReturn(session);
+		this.filter = new SessionRepositoryFilter<ExpiringSession>(sessionRepository);
+
+		doFilter(new DoInFilter() {
+			@Override
+			public void doFilter(HttpServletRequest wrappedRequest) {
+				HttpSession session = wrappedRequest.getSession();
+				long now = System.currentTimeMillis();
+				long fiveSecondsAgo = now - TimeUnit.SECONDS.toMillis(5);
+				assertThat(session.getLastAccessedTime()).isLessThanOrEqualTo(now);
+				assertThat(session.getLastAccessedTime()).isGreaterThanOrEqualTo(fiveSecondsAgo);
+			}
+		});
+	}
+
+	@Test
 	public void doFilterLastAccessedTime() throws Exception {
 		final String ACCESS_ATTR = "create";
 		doFilter(new DoInFilter() {
@@ -126,7 +148,7 @@ public class SessionRepositoryFilterTests {
 			}
 		});
 
-		Thread.sleep(10L);
+		Thread.sleep(1L);
 		nextRequest();
 
 		doFilter(new DoInFilter() {
@@ -1155,6 +1177,39 @@ public class SessionRepositoryFilterTests {
 
 		reset(sessionRepository);
 		setupRequest();
+
+		doFilter(new DoInFilter(){
+			@Override
+			public void doFilter(HttpServletRequest wrappedRequest, HttpServletResponse wrappedResponse) throws IOException {
+			}
+		});
+
+		verifyZeroInteractions(sessionRepository);
+	}
+
+	@Test
+	public void doFilterLazySessionCreation() throws Exception {
+		SessionRepository<ExpiringSession> sessionRepository = spy(new MapSessionRepository());
+
+		filter = new SessionRepositoryFilter<ExpiringSession>(sessionRepository);
+
+		doFilter(new DoInFilter(){
+			@Override
+			public void doFilter(HttpServletRequest wrappedRequest, HttpServletResponse wrappedResponse) throws IOException {
+			}
+		});
+
+		verifyZeroInteractions(sessionRepository);
+	}
+
+	@Test
+	public void doFilterLazySessionUpdates() throws Exception {
+		ExpiringSession session = this.sessionRepository.createSession();
+		this.sessionRepository.save(session);
+		SessionRepository<ExpiringSession> sessionRepository = spy(this.sessionRepository);
+		setSessionCookie(session.getId());
+
+		filter = new SessionRepositoryFilter<ExpiringSession>(sessionRepository);
 
 		doFilter(new DoInFilter(){
 			@Override

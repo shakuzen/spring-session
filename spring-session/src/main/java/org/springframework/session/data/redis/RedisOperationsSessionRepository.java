@@ -38,7 +38,6 @@ import org.springframework.session.ExpiringSession;
 import org.springframework.session.FindByPrincipalNameSessionRepository;
 import org.springframework.session.MapSession;
 import org.springframework.session.Session;
-import org.springframework.session.SessionRepository;
 import org.springframework.session.events.SessionCreatedEvent;
 import org.springframework.session.events.SessionDeletedEvent;
 import org.springframework.session.events.SessionDestroyedEvent;
@@ -248,7 +247,7 @@ import org.springframework.util.Assert;
  * @author Rob Winch
  */
 public class RedisOperationsSessionRepository implements FindByPrincipalNameSessionRepository<RedisOperationsSessionRepository.RedisSession>, MessageListener {
-	private static final Log logger = LogFactory.getLog(SessionMessageListener.class);
+	private static final Log logger = LogFactory.getLog(RedisOperationsSessionRepository.class);
 
 	/**
 	 * The default prefix for each key and channel in Redis used by Spring Session
@@ -366,7 +365,6 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 		for(Object id : sessionIds) {
 			RedisSession session = getSession((String) id);
 			if(session != null) {
-				session.setLastAccessedTime(session.originalLastAccessTime);
 				sessions.put(session.getId(), session);
 			}
 		}
@@ -393,7 +391,6 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 		}
 		RedisSession result = new RedisSession(loaded);
 		result.originalLastAccessTime = loaded.getLastAccessedTime();
-		result.setLastAccessedTime(System.currentTimeMillis());
 		return result;
 	}
 
@@ -436,6 +433,8 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 		}
 		return redisSession;
 	}
+
+	@SuppressWarnings("unchecked")
 	public void onMessage(Message message, byte[] pattern) {
 		byte[] messageChannel = message.getChannel();
 		byte[] messageBody = message.getBody();
@@ -486,7 +485,7 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 	}
 
 	public void handleCreated(Map<Object,Object> loaded, String channel) {
-		String id = channel.substring(channel.lastIndexOf(":"));
+		String id = channel.substring(channel.lastIndexOf(":") + 1);
 		ExpiringSession session = loadSession(id, loaded);
 		publishEvent(new SessionCreatedEvent(this, session));
 	}
@@ -665,6 +664,7 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 			return cached.getMaxInactiveIntervalInSeconds();
 		}
 
+		@SuppressWarnings("unchecked")
 		public Object getAttribute(String attributeName) {
 			return cached.getAttribute(attributeName);
 		}

@@ -29,7 +29,10 @@ import org.springframework.session.ExpiringSession;
 import org.springframework.session.SessionRepository;
 import org.springframework.session.events.SessionCreatedEvent;
 import org.springframework.session.events.SessionDestroyedEvent;
+import org.springframework.session.web.http.CookieHttpSessionStrategy;
+import org.springframework.session.web.http.CookieSerializer;
 import org.springframework.session.web.http.HttpSessionStrategy;
+import org.springframework.session.web.http.MultiHttpSessionStrategy;
 import org.springframework.session.web.http.SessionEventHttpSessionListenerAdapter;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 
@@ -82,9 +85,13 @@ import org.springframework.session.web.http.SessionRepositoryFilter;
 @EnableScheduling
 public class SpringHttpSessionConfiguration {
 
-	private HttpSessionStrategy httpSessionStrategy;
+	private CookieHttpSessionStrategy defaultHttpSessionStrategy = new CookieHttpSessionStrategy();
+
+	private HttpSessionStrategy httpSessionStrategy = defaultHttpSessionStrategy;
 
 	private List<HttpSessionListener> httpSessionListeners = new ArrayList<HttpSessionListener>();
+
+	private ServletContext servletContext;
 
 	@Bean
 	public SessionEventHttpSessionListenerAdapter sessionEventHttpSessionListenerAdapter() {
@@ -92,13 +99,25 @@ public class SpringHttpSessionConfiguration {
 	}
 
 	@Bean
-	public <S extends ExpiringSession> SessionRepositoryFilter<? extends ExpiringSession> springSessionRepositoryFilter(SessionRepository<S> sessionRepository, ServletContext servletContext) {
+	public <S extends ExpiringSession> SessionRepositoryFilter<? extends ExpiringSession> springSessionRepositoryFilter(SessionRepository<S> sessionRepository) {
 		SessionRepositoryFilter<S> sessionRepositoryFilter = new SessionRepositoryFilter<S>(sessionRepository);
 		sessionRepositoryFilter.setServletContext(servletContext);
-		if(httpSessionStrategy != null) {
+		if(httpSessionStrategy instanceof MultiHttpSessionStrategy) {
+			sessionRepositoryFilter.setHttpSessionStrategy((MultiHttpSessionStrategy) httpSessionStrategy);
+		} else {
 			sessionRepositoryFilter.setHttpSessionStrategy(httpSessionStrategy);
 		}
 		return sessionRepositoryFilter;
+	}
+
+	@Autowired(required=false)
+	public void setServletContext(ServletContext servletContext) {
+		this.servletContext = servletContext;
+	}
+
+	@Autowired(required = false)
+	public void setCookieSerializer(CookieSerializer cookieSerializer) {
+		this.defaultHttpSessionStrategy.setCookieSerializer(cookieSerializer);
 	}
 
 	@Autowired(required = false)

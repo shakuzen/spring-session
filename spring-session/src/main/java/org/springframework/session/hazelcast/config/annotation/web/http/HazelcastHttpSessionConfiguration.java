@@ -89,7 +89,8 @@ public class HazelcastHttpSessionConfiguration extends SpringHttpSessionConfigur
 
 	/**
 	 * Make a {@link MapConfig} for the given sessionMapName if one does not exist.
-	 * Ensure that maxIdleSeconds is set to maxInactiveIntervalInSeconds for proper session expiration.
+	 * Set Hazelcast's maxIdleSeconds to maxInactiveIntervalInSeconds if set (not "").
+	 * Otherwise get the externally configured maxIdleSeconds for the distributed sessions map.
 	 *
 	 * @param hazelcastInstance the {@link HazelcastInstance} to configure
 	 */
@@ -97,25 +98,14 @@ public class HazelcastHttpSessionConfiguration extends SpringHttpSessionConfigur
 		MapConfig sessionMapConfig = hazelcastInstance.getConfig().getMapConfig(sessionMapName);
 		if (this.maxInactiveIntervalInSeconds != null) {
 			sessionMapConfig.setMaxIdleSeconds(this.maxInactiveIntervalInSeconds);
+		} else {
+			this.maxInactiveIntervalInSeconds = sessionMapConfig.getMaxIdleSeconds();
 		}
 	}
 
 	public void setImportMetadata(AnnotationMetadata importMetadata) {
 		Map<String, Object> enableAttrMap = importMetadata.getAnnotationAttributes(EnableHazelcastHttpSession.class.getName());
 		AnnotationAttributes enableAttrs = AnnotationAttributes.fromMap(enableAttrMap);
-		if (enableAttrs == null) {
-			// search parent classes
-			Class<?> currentClass = ClassUtils.resolveClassName(importMetadata.getClassName(), beanClassLoader);
-			for (Class<?> classToInspect = currentClass; classToInspect != null; classToInspect = classToInspect.getSuperclass()) {
-				EnableHazelcastHttpSession enableHazelcastHttpSessionAnnotation = AnnotationUtils.findAnnotation(classToInspect, EnableHazelcastHttpSession.class);
-				if (enableHazelcastHttpSessionAnnotation == null) {
-					continue;
-				}
-				enableAttrMap = AnnotationUtils
-						.getAnnotationAttributes(enableHazelcastHttpSessionAnnotation);
-				enableAttrs = AnnotationAttributes.fromMap(enableAttrMap);
-			}
-		}
 
 		transferAnnotationAttributes(enableAttrs);
 	}
