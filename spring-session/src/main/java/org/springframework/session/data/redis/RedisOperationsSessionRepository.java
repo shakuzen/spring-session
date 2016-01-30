@@ -15,6 +15,7 @@
  */
 package org.springframework.session.data.redis;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -33,9 +34,11 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.JdkSerializationRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
+import org.springframework.expression.Expression;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.session.ExpiringSession;
-import org.springframework.session.FindByPrincipalNameSessionRepository;
+import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.MapSession;
 import org.springframework.session.Session;
 import org.springframework.session.events.SessionCreatedEvent;
@@ -246,8 +249,12 @@ import org.springframework.util.Assert;
  *
  * @author Rob Winch
  */
-public class RedisOperationsSessionRepository implements FindByPrincipalNameSessionRepository<RedisOperationsSessionRepository.RedisSession>, MessageListener {
+public class RedisOperationsSessionRepository implements FindByIndexNameSessionRepository<RedisOperationsSessionRepository.RedisSession>, MessageListener {
 	private static final Log logger = LogFactory.getLog(RedisOperationsSessionRepository.class);
+
+	private static final String SPRING_SECURITY_CONTEXT = "SPRING_SECURITY_CONTEXT";
+
+	static PrincipalNameResolver PRINCIPAL_NAME_RESOLVER = new PrincipalNameResolver();
 
 	/**
 	 * The default prefix for each key and channel in Redis used by Spring Session
@@ -358,8 +365,11 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 		return getSession(id, false);
 	}
 
-	public Map<String,RedisSession> findByPrincipalName(String principalName) {
-		String principalKey = getPrincipalKey(principalName);
+	public Map<String,RedisSession> findByIndexNameAndIndexValue(String indexName, String indexValue) {
+		if(!PRINCIPAL_NAME_INDEX_NAME.equals(indexName)) {
+			return Collections.emptyMap();
+		}
+		String principalKey = getPrincipalKey(indexValue);
 		Set<Object> sessionIds = sessionRedisOperations.boundSetOps(principalKey).members();
 		Map<String,RedisSession> sessions = new HashMap<String,RedisSession>(sessionIds.size());
 		for(Object id : sessionIds) {
@@ -469,7 +479,7 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 				logger.debug("Publishing SessionDestroyedEvent for session " + sessionId);
 			}
 
-			String principal = (String) session.getAttribute(Session.PRINCIPAL_NAME_ATTRIBUTE_NAME);
+			String principal = PRINCIPAL_NAME_RESOLVER.resolvePrincipal(session);
 			if(principal != null) {
 				sessionRedisOperations.boundSetOps(getPrincipalKey(principal)).remove(sessionId);
 			}
@@ -530,7 +540,7 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 	}
 
 	String getPrincipalKey(String principalName) {
-		return this.keyPrefix + "index:" + Session.PRINCIPAL_NAME_ATTRIBUTE_NAME + ":" + principalName;
+		return this.keyPrefix + "index:" + FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME + ":" + principalName;
 	}
 
 	String getExpirationsKey(long expiration) {
@@ -552,7 +562,7 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 	/**
 	 * Gets the prefix for the channel that SessionCreatedEvent are published to. The suffix is the session id of the session that was created.
 	 *
-	 * @return
+	 * @return the prefix for the channel that SessionCreatedEvent are published to
 	 */
 	public String getSessionCreatedChannelPrefix() {
 		return this.keyPrefix + "event:created:";
@@ -602,6 +612,7 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 		private Long originalLastAccessTime;
 		private Map<String, Object> delta = new HashMap<String,Object>();
 		private boolean isNew;
+		private String originalPrincipalName;
 
 		/**
 		 * Creates a new instance ensuring to mark all of the new attributes to be persisted in the next save operation.
@@ -614,8 +625,6 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 			this.isNew = true;
 		}
 
-
-
 		/**
 		 * Creates a new instance from the provided {@link MapSession}
 		 *
@@ -624,6 +633,7 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 		RedisSession(MapSession cached) {
 			Assert.notNull("MapSession cannot be null");
 			this.cached = cached;
+			this.originalPrincipalName = PRINCIPAL_NAME_RESOLVER.resolvePrincipal(this);
 		}
 
 		public void setNew(boolean isNew) {
@@ -689,11 +699,19 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 		private void saveDelta() {
 			String sessionId = getId();
 			getSessionBoundHashOperations(sessionId).putAll(delta);
-			String key = getSessionAttrNameKey(Session.PRINCIPAL_NAME_ATTRIBUTE_NAME);
-			if(delta.containsKey(key)) {
-				Object principal = delta.get(key);
-				String principalKey = getPrincipalKey((String) principal);
-				sessionRedisOperations.boundSetOps(principalKey).add(sessionId);
+			String principalSessionKey = getSessionAttrNameKey(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME);
+			String securityPrincipalSessionKey = getSessionAttrNameKey(SPRING_SECURITY_CONTEXT);
+			if(delta.containsKey(principalSessionKey) || delta.containsKey(securityPrincipalSessionKey)) {
+				if(originalPrincipalName != null) {
+					String originalPrincipalRedisKey = getPrincipalKey((String) originalPrincipalName);
+					sessionRedisOperations.boundSetOps(originalPrincipalRedisKey).remove(sessionId);
+				}
+				String principal = PRINCIPAL_NAME_RESOLVER.resolvePrincipal(this);
+				originalPrincipalName = principal;
+				if(principal != null) {
+					String principalRedisKey = getPrincipalKey(principal);
+					sessionRedisOperations.boundSetOps(principalRedisKey).add(sessionId);
+				}
 			}
 
 			delta = new HashMap<String,Object>(delta.size());
@@ -701,5 +719,23 @@ public class RedisOperationsSessionRepository implements FindByPrincipalNameSess
 			Long originalExpiration = originalLastAccessTime == null ? null : originalLastAccessTime + TimeUnit.SECONDS.toMillis(getMaxInactiveIntervalInSeconds())    ;
 			expirationPolicy.onExpirationUpdated(originalExpiration, this);
 		}
+	}
+
+	static class PrincipalNameResolver {
+		private SpelExpressionParser parser = new SpelExpressionParser();
+
+		public String resolvePrincipal(Session session) {
+			String principalName = session.getAttribute(PRINCIPAL_NAME_INDEX_NAME);
+			if(principalName != null) {
+				return principalName;
+			}
+			Object authentication = session.getAttribute(SPRING_SECURITY_CONTEXT);
+			if(authentication != null) {
+				Expression expression = parser.parseExpression("authentication?.name");
+				return expression.getValue(authentication, String.class);
+			}
+			return null;
+		}
+
 	}
 }

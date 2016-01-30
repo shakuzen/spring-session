@@ -51,8 +51,15 @@ import org.springframework.data.redis.core.BoundSetOperations;
 import org.springframework.data.redis.core.BoundValueOperations;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.serializer.JdkSerializationRedisSerializer;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.session.ExpiringSession;
+import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.MapSession;
+import org.springframework.session.data.redis.RedisOperationsSessionRepository.PrincipalNameResolver;
 import org.springframework.session.data.redis.RedisOperationsSessionRepository.RedisSession;
 import org.springframework.session.events.AbstractSessionEvent;
 
@@ -60,6 +67,8 @@ import org.springframework.session.events.AbstractSessionEvent;
 @RunWith(MockitoJUnitRunner.class)
 @SuppressWarnings({"unchecked","rawtypes"})
 public class RedisOperationsSessionRepositoryTests {
+	static final String SPRING_SECURITY_CONTEXT_KEY = "SPRING_SECURITY_CONTEXT";
+
 	@Mock
 	RedisConnectionFactory factory;
 	@Mock
@@ -345,7 +354,7 @@ public class RedisOperationsSessionRepositoryTests {
 				LAST_ACCESSED_ATTR, System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(5));
 		when(boundHashOperations.entries()).thenReturn(map);
 
-		assertThat(redisRepository.findByPrincipalName("principal")).isEmpty();
+		assertThat(redisRepository.findByIndexNameAndIndexValue(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, "principal")).isEmpty();
 	}
 
 	@Test
@@ -363,7 +372,7 @@ public class RedisOperationsSessionRepositoryTests {
 				LAST_ACCESSED_ATTR, lastAccessed);
 		when(boundHashOperations.entries()).thenReturn(map);
 
-		Map<String, RedisSession> sessionIdToSessions = redisRepository.findByPrincipalName("principal");
+		Map<String, RedisSession> sessionIdToSessions = redisRepository.findByIndexNameAndIndexValue(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, "principal");
 
 		assertThat(sessionIdToSessions).hasSize(1);
 		RedisSession session = sessionIdToSessions.get(sessionId);
@@ -406,6 +415,31 @@ public class RedisOperationsSessionRepositoryTests {
 
 		verify(publisher).publishEvent(event.capture());
 		assertThat(event.getValue().getSessionId()).isEqualTo(session.getId());
+	}
+
+	@Test
+	public void resolvePrincipalIndex() {
+		PrincipalNameResolver resolver = RedisOperationsSessionRepository.PRINCIPAL_NAME_RESOLVER;
+		String username = "username";
+		RedisSession session = redisRepository.createSession();
+		session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, username);
+
+		assertThat(resolver.resolvePrincipal(session)).isEqualTo(username);
+	}
+
+	@Test
+	public void resolveIndexOnSecurityContext() {
+		String principal = "resolveIndexOnSecurityContext";
+		Authentication authentication = new UsernamePasswordAuthenticationToken(principal, "notused", AuthorityUtils.createAuthorityList("ROLE_USER"));
+		SecurityContext context = new SecurityContextImpl();
+		context.setAuthentication(authentication);
+
+		PrincipalNameResolver resolver = RedisOperationsSessionRepository.PRINCIPAL_NAME_RESOLVER;
+
+		RedisSession session = redisRepository.createSession();
+		session.setAttribute(SPRING_SECURITY_CONTEXT_KEY, context);
+
+		assertThat(resolver.resolvePrincipal(session)).isEqualTo(principal);
 	}
 
 	private String getKey(String id) {
